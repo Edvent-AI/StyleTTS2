@@ -1,19 +1,8 @@
-import time
-import random
-import yaml
-from munch import Munch
 import numpy as np
-import torch
-from torch import nn
-import torch.nn.functional as F
-import torchaudio
-import librosa
-from nltk.tokenize import word_tokenize
 import glob
 
 from models import *
 from utils import *
-from text_utils import TextCleaner
 import argparse
 from infer_utils import *
 
@@ -40,10 +29,6 @@ def get_args():
     return args.parse_args()
 
 
-def synthesize_audio():
-    pass
-
-
 if __name__ == "__main__":
     args = get_args()
 
@@ -58,15 +43,10 @@ if __name__ == "__main__":
     for ref_aud in ref_audios:
         wav_name = os.path.basename(ref_aud)
 
-        # print(f"COMPUTING STYLE OF {wav_name}")
         _, ref_s, ref_p = compute_style(ref_aud, args.device, model)
 
         outdir = os.path.join(args.outdir, wav_name[:-4])
         os.makedirs(outdir, exist_ok=True)
 
-        # print(f"acoustic shape: {ref_s.shape}")
-        # print(f"prosodic shape: {ref_p.shape}")
-
-        # print()
         np.save(outdir + "/ref_s.npy", ref_s)
         np.save(outdir + "/ref_p.npy", ref_p)
