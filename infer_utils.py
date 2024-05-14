@@ -1,20 +1,11 @@
-# load packages
-import time
-import random
 import yaml
-from munch import Munch
-import numpy as np
 import torch
-from torch import nn
-import torch.nn.functional as F
 import torchaudio
 import librosa
-from nltk.tokenize import word_tokenize
 
 from models import *
 from utils import *
 from text_utils import TextCleaner
-import phonemizer
 from Utils.PLBERT.util import load_plbert
 from Modules.diffusion.sampler import DiffusionSampler, ADPM2Sampler, KarrasSchedule
 
@@ -26,10 +17,7 @@ to_mel = torchaudio.transforms.MelSpectrogram(
 MEAN, STD = -4, 4
 
 
-def load_modules(config, model_path, device):
-    # global_phonemizer = phonemizer.backend.EspeakBackend(
-    #     language="en-us", preserve_punctuation=True, with_stress=True
-    # ) # espeak is not yet installed on my machine
+def load_modules(config, model_path):
 
     config = yaml.safe_load(open(config, "r"))
     # load pretrained ASR model
@@ -66,28 +54,17 @@ def load_modules(config, model_path, device):
                 for k, v in state_dict.items():
                     name = k[7:]  # remove `module.`
                     new_state_dict[name] = v
-                # load params
                 model[key].load_state_dict(new_state_dict, strict=False)
     _ = [model[key].eval() for key in model]
 
     sampler = DiffusionSampler(
         model.diffusion.diffusion,
         sampler=ADPM2Sampler(),
-        sigma_schedule=KarrasSchedule(
-            sigma_min=0.0001, sigma_max=3.0, rho=9.0
-        ),  # empirical parameters
+        sigma_schedule=KarrasSchedule(sigma_min=0.0001, sigma_max=3.0, rho=9.0),
         clamp=False,
     )
 
-    return (
-        model,
-        sampler,
-        model_params,  # for matching decoder type
-    )
-
-
-def load_pipeline():
-    pass
+    return (model, sampler, model_params)
 
 
 def length_to_mask(lengths):
