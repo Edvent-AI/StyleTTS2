@@ -1,8 +1,12 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import Dataset, DataLoader
+from sklearn.preprocessing import LabelEncoder
+import os
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_sizes):
@@ -33,8 +37,8 @@ class Encoder(nn.Module):
     def forward(self, ref_s, ref_p):
         input = torch.cat((ref_s, ref_p), dim=1)
         z = self.enc(input)
-        z_a = z[:n_a]
-        z_o = z[n_a:]
+        z_a = z[:,:n_a]
+        z_o = z[:,n_a:]
         return z_a, z_o
 
 class Decoder(nn.Module):
@@ -46,8 +50,8 @@ class Decoder(nn.Module):
     def forward(self, z_a, z_o):
         input = torch.cat((z_a, z_o), dim=1)
         ref_pred = self.dec(input)
-        ref_s_pred = ref_pred[:n_s]
-        ref_p_pred = ref_pred[n_s]
+        ref_s_pred = ref_pred[:,:n_s]
+        ref_p_pred = ref_pred[:,n_s:]
         return ref_s_pred, ref_p_pred
 
 class Classifier(nn.Module):
@@ -61,7 +65,7 @@ class Classifier(nn.Module):
 
 class Disentangler(nn.Module):
     def __init__(self, input_size, output_size, hidden_sizes):
-        super(Disentangler1, self).__init__()
+        super(Disentangler, self).__init__()
         self.disentangler = MLP(input_size, hidden_sizes + [output_size])
     
     def forward(self, z_a):
@@ -86,20 +90,12 @@ class AccentAdapter(nn.Module):
         z_a_pred = self.disentangler2(z_o)
         return z_a, z_o, ref_s_pred, ref_p_pred, y_a_pred, z_o_pred, z_a_pred
 
-# Hyperparameters
-n_s, n_p = 128, 128  # Example input sizes
-n_a = 16
-n_o = 48
-num_classes = 2
-enc_hidden_sizes = [128,96,64]
-dec_hidden_sizes = [64,96,128]
-dis1_hidden_sizes = [32,32]
-dis2_hidden_sizes = [32,32]
+    def forward(self, ref_s, ref_p): #TODO
+        z_a, z_o = self.encoder(ref_s, ref_p)
+        ref_s_pred, ref_p_pred = self.decoder(z_a, z_o)
+        return z_a, z_o
 
 
-
-
-full_networks = AccentAdapter(n_s, n_p, n_a, n_o, num_classes, enc_hidden_sizes, dec_hidden_sizes, dis1_hidden_sizes, dis2_hidden_sizes)
 # Training loop
 def train_step(ref_s, ref_p, y_a, full_networks):
     optimizer_encoder = optim.Adam(full_networks.encoder.parameters(), lr=1e-4)
@@ -116,15 +112,15 @@ def train_step(ref_s, ref_p, y_a, full_networks):
     # Train Encoder, Decoder and Classifier
     # Forward pass
     z_a, z_o, ref_s_pred, ref_p_pred, y_a_pred, z_o_pred, z_a_pred = full_networks.forward_full(ref_s, ref_p)
-    
     # Compute losses
     L1 = criterion_reconstruction(ref_s_pred, ref_s) + criterion_reconstruction(ref_p_pred, ref_p)
     L2 = criterion_classification(y_a_pred, y_a)
     L3 = criterion_reconstruction(z_o_pred.detach(), z_o)
     L4 = criterion_reconstruction(z_a_pred.detach(), z_a)
-    
+
     # Optimise Encoder, Decoder and Classifier
     loss_encoder_decoder = L1 + L2 - L3 - L4
+
     loss_encoder_decoder.backward()
     optimizer_encoder.zero_grad()
     optimizer_decoder.zero_grad()
@@ -155,28 +151,73 @@ def train_step(ref_s, ref_p, y_a, full_networks):
     return loss_encoder_decoder.item(), L1.item(), L2.item(), L3.item(), L4.item()
 
 
-# Define Dataset
-num_epochs = 100
-for epoch in range(num_epochs):
-    # Initialize TensorBoard SummaryWriter
-    writer = SummaryWriter()
-    ref_s = torch.randn(32, n_s)
-    ref_p = torch.randn(32, n_p)
-    y_a = torch.randint(0, num_classes, (2,))
-    for step, batch in enumerate(dataset): #TODO
-        ref_s, ref_p, y_a = batch
-        loss_encoder_decoder, L1, L2, L3, L4 = train_step(ref_s, ref_p, y_a, full_networks)
-        # Log the losses to TensorBoard
-        writer.add_scalar('Loss/Encoder_Decoder', loss_encoder_decoder.item(), step)
-        writer.add_scalar('Loss/L1_Reconstruction', L1.item(), step)
-        writer.add_scalar('Loss/L2_Classification', L2.item(), step)
-        writer.add_scalar('Loss/L3_Disentangler1', L3.item(), step)
-        writer.add_scalar('Loss/L4_Disentangler2', L4.item(), step)
-    
-    print(f"Epoch {epoch+1}, L1_Reconstruction: {L1}, L2_Classification: {L2}, L3_Disentangler1: {L3}, L4_Disentangler2: {L4}")
-    # Save the model every 10 epochs
-    if (epoch + 1) % 10 == 0:
-        torch.save(full_networks.state_dict(), f'accent_adapter_epoch_{epoch+1}.pth')
 
-    # Close the TensorBoard writer
+class CustomDataset(Dataset):
+    def __init__(self, ref_s, ref_p, y):
+        self.ref_s = torch.tensor(ref_s, dtype=torch.float32)
+        self.ref_p = torch.tensor(ref_p, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=torch.long)  # Assuming y is for classification
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        return self.ref_s[idx], self.ref_p[idx], self.y[idx]
+
+
+if __name__ == "__main__":
+    # args: TODO
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    n_s, n_p = 128, 128
+    n_a = 16
+    n_o = 48
+    num_classes = 2
+    enc_hidden_sizes = [128,96,64]
+    dec_hidden_sizes = [64,96,128]
+    dis1_hidden_sizes = [32,32]
+    dis2_hidden_sizes = [32,32]
+    num_epochs = 1000
+    batch_size = 32
+    ref_s_path = "/mnt/iusers01/fatpou01/compsci01/n70579mp/scratch/datasets/speech/vctk/styletts2/emb/ref_s_all.npy"
+    ref_p_path = "/mnt/iusers01/fatpou01/compsci01/n70579mp/scratch/datasets/speech/vctk/styletts2/emb/ref_p_all.npy"
+    label_path = "/mnt/iusers01/fatpou01/compsci01/n70579mp/scratch/datasets/speech/vctk/styletts2/emb/labels.npy"
+    model_saved_dir = "logs"
+    save_every = 20
+    log_every = 100
+    if not(os.path.exists(model_saved_dir)):
+        os.makedirs(model_saved_dir)
+    
+    
+    writer = SummaryWriter()
+    ref_s = np.squeeze(np.load(ref_s_path))
+    ref_p = np.squeeze(np.load(ref_p_path))
+    labels = np.load(label_path)
+    print("Num samples", labels.shape[0])
+
+    y = labels[:, 2] # y[i] =  ['p362_312' 'p362' 'American' 'F' '29']
+    label_encoder = LabelEncoder()
+    y = label_encoder.fit_transform(y)
+    dataset = CustomDataset(ref_s, ref_p, y)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    full_networks = AccentAdapter(n_s, n_p, n_a, n_o, num_classes, enc_hidden_sizes, dec_hidden_sizes, dis1_hidden_sizes, dis2_hidden_sizes).to(device)
+    global_step = 0
+    for epoch in range(num_epochs):
+        for step, batch in enumerate(dataloader):
+            ref_s, ref_p, y_a = batch[0].to(device), batch[1].to(device), batch[2].to(device)
+            loss_encoder_decoder, L1, L2, L3, L4 = train_step(ref_s, ref_p, y_a, full_networks)
+            
+            # Log the losses to TensorBoard
+            if global_step % log_every == 0:
+                writer.add_scalar('Loss/Encoder_Decoder', loss_encoder_decoder, global_step)
+                writer.add_scalar('Loss/Reconstruction', L1, global_step)
+                writer.add_scalar('Loss/Classification', L2, global_step)
+                writer.add_scalar('Loss/Disentangler1', L3, global_step)
+                writer.add_scalar('Loss/Disentangler2', L4, global_step)
+            global_step+=1
+        print(f"Epoch {epoch+1}, L1_Reconstruction: {L1}, L2_Classification: {L2}, L3_Disentangler1: {L3}, L4_Disentangler2: {L4}")
+        # Save the model every 10 epochs
+        if (epoch + 1) % save_every == 0:
+            torch.save(full_networks.state_dict(), os.path.join(model_saved_dir, f'accent_adapter_epoch_{epoch+1}.pth'))
+            
     writer.close()
