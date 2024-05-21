@@ -1,0 +1,51 @@
+training:
+  save_path: 
+  device: cuda
+  seed: 1634652276
+  log_freq: 20
+  keep_periodic_checkpoints: 0
+  keep_best_checkpoints: 1
+  eval_batch_size: 128
+  train_batch_size: 64
+  max_epochs: 100
+  early_stop_dataset:
+  early_stop_patience: 
+model:
+  type: AccentAdapterModel
+  n_s: 128
+  n_p: 128  # Example input sizes
+  n_a: 16
+  n_o: 48
+  num_classes: 2
+  enc_hidden_sizes: [128, 96, 64]
+  dec_hidden_sizes: [64, 96, 128]
+  a2o_hidden_sizes: [32, 32]
+  o2a_hidden_sizes: [32, 32]
+  loss_conf: 
+    name:
+  layer_conf: 
+    MLP: 
+    - nn.Linear(input_size, hidden_size)
+    - nn.BatchNorm1d(hidden_size)
+    - nn.ReLU()
+    accent_predictor: 
+    - nn.Linear(input_size, hidden_size)
+    encoder: 
+    - partial(MLP)
+    decoder: 
+    - partial(MLP)
+    a2o_disentangler: 
+    - partial(MLP)
+    o2a_disentangler: 
+    - partial(MLP)
+datasets:
+  vctk:
+    track_metric: 
+    ds_factory:
+      config:
+        embedding_folder:
+        main_path:
+        splits:
+          train: train.jsonl
+          dev: dev.jsonl
+          test: test.jsonl
