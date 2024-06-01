@@ -1,0 +1,37 @@
+training:
+  save_path: 
+  device: cuda
+  seed: 1634652276
+  log_freq: 20
+  keep_periodic_checkpoints: 0
+  keep_best_checkpoints: 1
+  eval_batch_size: 128
+  train_batch_size: 64
+  max_epochs: 100
+  early_stop_dataset:
+  early_stop_patience: 
+model:
+  type: MultimodalTextImageModel
+  loss_conf:
+    name: bce
+  layer_conf:
+    accent_predictor:
+    - nn.Linear(768, 64, bias=True)
+    - nn.Tanh()
+    - nn.Dropout(0.4)
+    - nn.Linear(64, 1, bias=False)
+    adapter_encoder:
+    adapter_decoder:
+    accent2other_disentangler:
+    other2accent_disentangler:
+datasets:
+  vctk:
+    track_metric: 
+    ds_factory:
+      config:
+        embedding_folder:
+        main_path:
+        splits:
+          train: train.jsonl
+          dev: dev.jsonl
+          test: test.jsonl
