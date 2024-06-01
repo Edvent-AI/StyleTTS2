@@ -120,8 +120,7 @@ def train_step(ref_s, ref_p, y_a, full_networks):
     L3 = criterion_reconstruction(z_o_pred.detach(), z_o)
     L4 = criterion_reconstruction(z_a_pred.detach(), z_a)
 
-    # Optimise Encoder, Decoder and Classifier
-    
+    # Optimise Encoder, Decoder and Classifier    
     optimizer_encoder.zero_grad()
     optimizer_decoder.zero_grad()
     optimizer_classifier.zero_grad()
@@ -153,7 +152,6 @@ def train_step(ref_s, ref_p, y_a, full_networks):
 
     
     return loss_encoder_decoder.item(), L1.item(), L2.item(), L3.item(), L4.item()
-
 
 
 
@@ -194,6 +192,7 @@ if __name__ == "__main__":
     ref_p_path = "/mnt/iusers01/fatpou01/compsci01/n70579mp/scratch/datasets/speech/vctk/styletts2/emb/ref_p_all.npy"
     label_path = "/mnt/iusers01/fatpou01/compsci01/n70579mp/scratch/datasets/speech/vctk/styletts2/emb/labels.npy"
     model_saved_dir = "logs/default"
+
     save_every = 20
     log_every = 100
     if not(os.path.exists(model_saved_dir)):
