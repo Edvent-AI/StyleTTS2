@@ -7,6 +7,8 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import LabelEncoder
 import os
+import pandas as pd
+from constants import *
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_sizes):
@@ -101,8 +103,8 @@ def train_step(ref_s, ref_p, y_a, full_networks):
     optimizer_encoder = optim.Adam(full_networks.encoder.parameters(), lr=1e-4)
     optimizer_decoder = optim.Adam(full_networks.decoder.parameters(), lr=1e-4)
     optimizer_classifier = optim.Adam(full_networks.classifier.parameters(), lr=1e-4)
-    optimizer_disentangler1 = optim.Adam(full_networks.disentangler1.parameters(), lr=1e-4)
-    optimizer_disentangler2 = optim.Adam(full_networks.disentangler2.parameters(), lr=1e-4)
+    optimizer_disentangler1 = optim.Adam(full_networks.disentangler1.parameters(), lr=1e-6)
+    optimizer_disentangler2 = optim.Adam(full_networks.disentangler2.parameters(), lr=1e-6)
 
     criterion_reconstruction = nn.MSELoss()
     criterion_classification = nn.CrossEntropyLoss()
@@ -118,13 +120,14 @@ def train_step(ref_s, ref_p, y_a, full_networks):
     L3 = criterion_reconstruction(z_o_pred.detach(), z_o)
     L4 = criterion_reconstruction(z_a_pred.detach(), z_a)
 
-    # Optimise Encoder, Decoder and Classifier
-    loss_encoder_decoder = L1 + L2 - L3 - L4
-
-    loss_encoder_decoder.backward()
+    # Optimise Encoder, Decoder and Classifier    
     optimizer_encoder.zero_grad()
     optimizer_decoder.zero_grad()
     optimizer_classifier.zero_grad()
+    
+    loss_encoder_decoder = L1 + L2 - L3 - L4
+    loss_encoder_decoder.backward()
+
     optimizer_encoder.step()
     optimizer_decoder.step()
     optimizer_classifier.step()
@@ -152,17 +155,24 @@ def train_step(ref_s, ref_p, y_a, full_networks):
 
 
 
-class CustomDataset(Dataset):
-    def __init__(self, ref_s, ref_p, y):
+# Custom dataset class
+class SpeakerDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+        ref_s = list(data['ref_s'])
+        ref_p = list(data['ref_p'])
+        y = list(data['y'])
         self.ref_s = torch.tensor(ref_s, dtype=torch.float32)
         self.ref_p = torch.tensor(ref_p, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.long)  # Assuming y is for classification
+        self.spk_id = list(data['speaker_id'])
+        self.sex = list(data['sex'])
 
     def __len__(self):
-        return len(self.y)
-
+        return len(self.data)
+    
     def __getitem__(self, idx):
-        return self.ref_s[idx], self.ref_p[idx], self.y[idx]
+        return self.ref_s[idx], self.ref_p[idx], self.y[idx], self.spk_id[idx], self.sex[idx]
 
 
 if __name__ == "__main__":
@@ -181,7 +191,8 @@ if __name__ == "__main__":
     ref_s_path = "/mnt/iusers01/fatpou01/compsci01/n70579mp/scratch/datasets/speech/vctk/styletts2/emb/ref_s_all.npy"
     ref_p_path = "/mnt/iusers01/fatpou01/compsci01/n70579mp/scratch/datasets/speech/vctk/styletts2/emb/ref_p_all.npy"
     label_path = "/mnt/iusers01/fatpou01/compsci01/n70579mp/scratch/datasets/speech/vctk/styletts2/emb/labels.npy"
-    model_saved_dir = "logs"
+    model_saved_dir = "logs/default"
+
     save_every = 20
     log_every = 100
     if not(os.path.exists(model_saved_dir)):
@@ -193,29 +204,55 @@ if __name__ == "__main__":
     ref_p = np.squeeze(np.load(ref_p_path))
     labels = np.load(label_path)
     print("Num samples", labels.shape[0])
-
+    print("Num Train Speakers", len(train_spk))
     y = labels[:, 2] # y[i] =  ['p362_312' 'p362' 'American' 'F' '29']
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(y)
-    dataset = CustomDataset(ref_s, ref_p, y)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    spk_id = labels[:, 1]
+    sex = labels[:,3]
+
+    # Create a dataframe for easy manipulation
+    data = pd.DataFrame({'ref_s': list(ref_s), 'ref_p': list(ref_p), 'y': list(y), 'speaker_id': list(spk_id), "sex":list(sex)})
+
+    # Split the data based on speaker_ids
+    train_data = data[data['speaker_id'].isin(train_spk)]
+    # test_data = data[data['speaker_id'].isin(test_spk)]
+
+    # Create datasets
+    train_dataset = SpeakerDataset(train_data)
+    # test_dataset = SpeakerDataset(test_data)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
     full_networks = AccentAdapter(n_s, n_p, n_a, n_o, num_classes, enc_hidden_sizes, dec_hidden_sizes, dis1_hidden_sizes, dis2_hidden_sizes).to(device)
     global_step = 0
+    running_loss_encoder_decoder = 0.0
+    running_L1 = 0.0
+    running_L2 = 0.0
+    running_L3 = 0.0
+    running_L4 = 0.0
     for epoch in range(num_epochs):
-        for step, batch in enumerate(dataloader):
+        for step, batch in enumerate(train_loader):
             ref_s, ref_p, y_a = batch[0].to(device), batch[1].to(device), batch[2].to(device)
             loss_encoder_decoder, L1, L2, L3, L4 = train_step(ref_s, ref_p, y_a, full_networks)
-            
+            running_loss_encoder_decoder += loss_encoder_decoder
+            running_L1 += L1
+            running_L2 += L2
+            running_L3 += L3
+            running_L4 += L4
             # Log the losses to TensorBoard
-            if global_step % log_every == 0:
-                writer.add_scalar('Loss/Encoder_Decoder', loss_encoder_decoder, global_step)
-                writer.add_scalar('Loss/Reconstruction', L1, global_step)
-                writer.add_scalar('Loss/Classification', L2, global_step)
-                writer.add_scalar('Loss/Disentangler1', L3, global_step)
-                writer.add_scalar('Loss/Disentangler2', L4, global_step)
+            if global_step % log_every == log_every-1:
+                writer.add_scalar('Loss/Encoder_Decoder', running_loss_encoder_decoder / log_every, global_step)
+                writer.add_scalar('Loss/Reconstruction', running_L1 / log_every, global_step)
+                writer.add_scalar('Loss/Classification', running_L2 / log_every, global_step)
+                writer.add_scalar('Loss/Disentangler1', running_L3 / log_every, global_step)
+                writer.add_scalar('Loss/Disentangler2', running_L4 / log_every, global_step)
+                running_loss_encoder_decoder = 0.0
+                running_L1 = 0.0
+                running_L2 = 0.0
+                running_L3 = 0.0
+                running_L4 = 0.0
             global_step+=1
-        print(f"Epoch {epoch+1}, L1_Reconstruction: {L1}, L2_Classification: {L2}, L3_Disentangler1: {L3}, L4_Disentangler2: {L4}")
+        print(f"Epoch {epoch+1}, L1_Reconstruction: {running_L1}, L2_Classification: {running_L2}, L3_Disentangler1: {running_L3}, L4_Disentangler2: {running_L4}")
         # Save the model every 10 epochs
         if (epoch + 1) % save_every == 0:
             torch.save(full_networks.state_dict(), os.path.join(model_saved_dir, f'accent_adapter_epoch_{epoch+1}.pth'))
